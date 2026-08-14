@@ -47,6 +47,28 @@ message MapDataInfo {
   optional bytes mapData = 1;
 }
 
+message CleanPathPointInfo {
+  optional uint32 type = 1;
+  optional float x = 2;
+  optional float y = 3;
+}
+
+message CleanPathInfo {
+  repeated CleanPathPointInfo points = 2;
+}
+
+message ChargerInfo {
+  optional float angle = 1;
+  optional float y = 2;
+  optional float x = 3;
+}
+
+message RobotPositionInfo {
+  optional float x = 3;
+  optional float y = 4;
+  optional float angle = 5;
+}
+
 message RoomDataInfo {
   optional uint32 roomId = 1;
   optional string roomName = 2;
@@ -61,10 +83,24 @@ message RoomDataInfo {
   optional uint32 global_seq = 12;
 }
 
+message RoomBoundaryPointInfo {
+  optional uint32 x = 1;
+  optional uint32 y = 2;
+}
+
+message RoomBoundaryInfo {
+  optional uint32 roomId = 1;
+  repeated RoomBoundaryPointInfo points = 2;
+}
+
 message RobotMap {
   optional uint32 mapType = 1;
   optional MapExtInfo mapExtInfo = 2;
   optional MapHeadInfo mapHead = 3;
   optional MapDataInfo mapData = 4;
+  optional CleanPathInfo cleanPathInfo = 6;
+  optional ChargerInfo chargerInfo = 7;
+  optional RobotPositionInfo robotPositionInfo = 8;
   repeated RoomDataInfo roomDataInfo = 12;
+  repeated RoomBoundaryInfo roomBoundaryInfo = 14;
 }

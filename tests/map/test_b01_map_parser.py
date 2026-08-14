@@ -12,11 +12,16 @@ from PIL import Image
 
 from roborock.exceptions import RoborockException
 from roborock.map.b01_map_parser import (
+    B01MapOverlays,
     B01MapParser,
     B01MapParserConfig,
+    B01RoomBoundary,
     B01RoomLabel,
+    _extract_map_overlays,
+    _extract_room_boundaries,
     _extract_room_labels,
     _parse_scmap_payload,
+    _split_path,
 )
 from roborock.map.proto.b01_scmap_pb2 import RobotMap  # type: ignore[attr-defined]
 from roborock.protocols.b01_q7_protocol import create_map_key, decode_map_payload
@@ -170,6 +175,112 @@ def test_b01_map_parser_renders_room_label() -> None:
     )
 
     assert with_labels.image_content != without_labels.image_content
+
+
+def test_b01_map_parser_extracts_room_boundary() -> None:
+    payload = RobotMap()
+    payload.mapHead.sizeX = 4
+    payload.mapHead.sizeY = 3
+    room = payload.roomDataInfo.add()
+    room.roomId = 42
+    room.colorId = 7
+    boundary = payload.roomBoundaryInfo.add()
+    boundary.roomId = 42
+    for x, y in ((0, 0), (1, 0), (1, 1)):
+        point = boundary.points.add()
+        point.x = x
+        point.y = y
+
+    assert _extract_room_boundaries(payload) == [
+        B01RoomBoundary(
+            room_id=42,
+            color_id=7,
+            points=((0, 2), (1, 2), (1, 1)),
+        )
+    ]
+
+
+def test_b01_map_parser_renders_room_boundary() -> None:
+    payload = RobotMap()
+    payload.mapHead.sizeX = 4
+    payload.mapHead.sizeY = 3
+    payload.mapData.mapData = bytes([128]) * 12
+    boundary = payload.roomBoundaryInfo.add()
+    boundary.roomId = 7
+    for x, y in ((0, 0), (1, 0), (1, 1)):
+        point = boundary.points.add()
+        point.x = x
+        point.y = y
+
+    with_boundaries = B01MapParser(B01MapParserConfig(map_scale=4)).parse(payload.SerializeToString())
+    without_boundaries = B01MapParser(B01MapParserConfig(map_scale=4, show_room_boundaries=False)).parse(
+        payload.SerializeToString()
+    )
+
+    assert with_boundaries.image_content != without_boundaries.image_content
+
+
+def test_b01_map_parser_extracts_dynamic_overlays() -> None:
+    payload = RobotMap()
+    payload.mapHead.sizeX = 4
+    payload.mapHead.sizeY = 3
+    payload.mapHead.minX = 10
+    payload.mapHead.minY = 20
+    payload.mapHead.resolution = 0.5
+    path_point = payload.cleanPathInfo.points.add()
+    path_point.x = 11
+    path_point.y = 20.5
+    payload.chargerInfo.x = 10.5
+    payload.chargerInfo.y = 20.5
+    payload.robotPositionInfo.x = 11.5
+    payload.robotPositionInfo.y = 21
+
+    assert _extract_map_overlays(payload) == B01MapOverlays(
+        path=((2, 1),),
+        charger=(1, 1),
+        robot=(3, 0),
+    )
+
+
+def test_b01_map_parser_renders_dynamic_overlays() -> None:
+    payload = RobotMap()
+    payload.mapHead.sizeX = 40
+    payload.mapHead.sizeY = 30
+    payload.mapHead.minX = 0
+    payload.mapHead.minY = 0
+    payload.mapHead.resolution = 1
+    payload.mapData.mapData = bytes([128]) * (40 * 30)
+    for x, y in ((2, 2), (20, 15), (35, 25)):
+        point = payload.cleanPathInfo.points.add()
+        point.x = x
+        point.y = y
+    payload.chargerInfo.x = 2
+    payload.chargerInfo.y = 2
+    payload.robotPositionInfo.x = 35
+    payload.robotPositionInfo.y = 25
+
+    with_overlays = B01MapParser(B01MapParserConfig(map_scale=4)).parse(payload.SerializeToString())
+    without_overlays = B01MapParser(
+        B01MapParserConfig(
+            map_scale=4,
+            show_path=False,
+            show_charger=False,
+            show_robot=False,
+        )
+    ).parse(payload.SerializeToString())
+
+    assert with_overlays.image_content != without_overlays.image_content
+    assert with_overlays.map_data is not None
+    assert with_overlays.map_data.path is not None
+    assert with_overlays.map_data.charger is not None
+    assert with_overlays.map_data.vacuum_position is not None
+
+
+def test_b01_map_parser_splits_discontinuous_path() -> None:
+    assert _split_path(((0, 0), (1, 1), (20, 20), (21, 21))) == [
+        [(0, 0), (1, 1)],
+        [(20, 20), (21, 21)],
+    ]
 
 
 def test_b01_map_parser_rejects_invalid_payload() -> None:
