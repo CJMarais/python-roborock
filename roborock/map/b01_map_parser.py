@@ -8,7 +8,8 @@ import io
 from dataclasses import dataclass
 
 from google.protobuf.message import DecodeError
-from PIL import Image
+from PIL import Image, ImageDraw
+from vacuum_map_parser_base.config.color import ColorsPalette
 from vacuum_map_parser_base.config.image_config import ImageConfig
 from vacuum_map_parser_base.map_data import ImageData, MapData
 
@@ -27,6 +28,19 @@ class B01MapParserConfig:
     map_scale: int = 4
     """Scale factor for the rendered map image."""
 
+    show_room_labels: bool = True
+    """Draw room names at the positions supplied by the device."""
+
+
+@dataclass(frozen=True)
+class B01RoomLabel:
+    """Room label projected into the map grid."""
+
+    name: str
+    x: float
+    y: float
+    color_id: int
+
 
 class B01MapParser:
     """Decoder/parser for B01/Q7 SCMap payloads."""
@@ -39,8 +53,15 @@ class B01MapParser:
         parsed = _parse_scmap_payload(payload)
         size_x, size_y, grid = _extract_grid(parsed)
         room_names = _extract_room_names(parsed)
+        room_labels = _extract_room_labels(parsed)
 
-        image = _render_occupancy_image(grid, size_x=size_x, size_y=size_y, scale=self._config.map_scale)
+        image = _render_occupancy_image(
+            grid,
+            size_x=size_x,
+            size_y=size_y,
+            scale=self._config.map_scale,
+            room_labels=room_labels if self._config.show_room_labels else None,
+        )
 
         map_data = MapData()
         map_data.image = ImageData(
@@ -102,7 +123,67 @@ def _extract_room_names(parsed: RobotMap) -> dict[int, str]:
     return room_names
 
 
-def _render_occupancy_image(grid: bytes, *, size_x: int, size_y: int, scale: int) -> Image.Image:
+def _extract_room_labels(parsed: RobotMap) -> list[B01RoomLabel]:
+    """Project device-supplied room label positions into the map grid."""
+    if not parsed.HasField("mapHead"):
+        return []
+    header = parsed.mapHead
+    if (
+        not header.HasField("resolution")
+        or header.resolution <= 0
+        or not header.HasField("minX")
+        or not header.HasField("minY")
+        or not header.HasField("sizeX")
+        or not header.HasField("sizeY")
+    ):
+        return []
+
+    labels: list[B01RoomLabel] = []
+    for room in parsed.roomDataInfo:
+        if not room.HasField("roomId") or not room.HasField("roomNamePost"):
+            continue
+        x = (room.roomNamePost.x - header.minX) / header.resolution
+        y = header.sizeY - 1 - (room.roomNamePost.y - header.minY) / header.resolution
+        if not 0 <= x < header.sizeX or not 0 <= y < header.sizeY:
+            continue
+        labels.append(
+            B01RoomLabel(
+                name=room.roomName if room.HasField("roomName") else f"Room {room.roomId}",
+                x=x,
+                y=y,
+                color_id=room.colorId if room.HasField("colorId") else room.roomId,
+            )
+        )
+    return labels
+
+
+def _draw_room_labels(image: Image.Image, labels: list[B01RoomLabel], *, scale: int) -> None:
+    """Draw readable room-name pills without inventing room geometry."""
+    draw = ImageDraw.Draw(image)
+    palette = ColorsPalette()
+    padding = max(2, scale)
+    radius = max(2, scale)
+    for label in labels:
+        position = (round(label.x * scale), round(label.y * scale))
+        bounds = draw.textbbox(position, label.name, anchor="mm")
+        background = (
+            bounds[0] - padding,
+            bounds[1] - padding,
+            bounds[2] + padding,
+            bounds[3] + padding,
+        )
+        draw.rounded_rectangle(background, radius=radius, fill=palette.get_room_color(label.color_id))
+        draw.text(position, label.name, fill=(0, 0, 0), anchor="mm")
+
+
+def _render_occupancy_image(
+    grid: bytes,
+    *,
+    size_x: int,
+    size_y: int,
+    scale: int,
+    room_labels: list[B01RoomLabel] | None = None,
+) -> Image.Image:
     """Render the B01 occupancy grid into a simple image."""
 
     # The observed occupancy grid contains only:
@@ -117,6 +198,9 @@ def _render_occupancy_image(grid: bytes, *, size_x: int, size_y: int, scale: int
     mapped = grid.translate(bytes(table))
     img = Image.frombytes("L", (size_x, size_y), mapped)
     img = img.transpose(Image.Transpose.FLIP_TOP_BOTTOM).convert("RGB")
+
+    if room_labels:
+        _draw_room_labels(img, room_labels, scale=1)
 
     if scale > 1:
         img = img.resize((size_x * scale, size_y * scale), resample=Image.Resampling.NEAREST)

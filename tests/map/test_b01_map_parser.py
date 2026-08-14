@@ -11,7 +11,13 @@ from Crypto.Util.Padding import pad
 from PIL import Image
 
 from roborock.exceptions import RoborockException
-from roborock.map.b01_map_parser import B01MapParser, _parse_scmap_payload
+from roborock.map.b01_map_parser import (
+    B01MapParser,
+    B01MapParserConfig,
+    B01RoomLabel,
+    _extract_room_labels,
+    _parse_scmap_payload,
+)
 from roborock.map.proto.b01_scmap_pb2 import RobotMap  # type: ignore[attr-defined]
 from roborock.protocols.b01_q7_protocol import create_map_key, decode_map_payload
 
@@ -124,6 +130,46 @@ def test_b01_scmap_parser_maps_observed_schema_fields() -> None:
     assert parsed.roomDataInfo[0].global_seq == 9
     assert parsed.roomDataInfo[1].roomId == 99
     assert not parsed.roomDataInfo[1].HasField("roomName")
+
+
+def test_b01_map_parser_projects_room_labels() -> None:
+    payload = RobotMap()
+    payload.mapHead.sizeX = 4
+    payload.mapHead.sizeY = 3
+    payload.mapHead.minX = 10
+    payload.mapHead.minY = 20
+    payload.mapHead.resolution = 0.5
+    room = payload.roomDataInfo.add()
+    room.roomId = 42
+    room.roomName = "Kitchen"
+    room.roomNamePost.x = 11
+    room.roomNamePost.y = 20.5
+    room.colorId = 7
+
+    assert _extract_room_labels(payload) == [B01RoomLabel(name="Kitchen", x=2, y=1, color_id=7)]
+
+
+def test_b01_map_parser_renders_room_label() -> None:
+    payload = RobotMap()
+    payload.mapHead.sizeX = 40
+    payload.mapHead.sizeY = 30
+    payload.mapHead.minX = 0
+    payload.mapHead.minY = 0
+    payload.mapHead.resolution = 1
+    payload.mapData.mapData = bytes([128]) * (40 * 30)
+    room = payload.roomDataInfo.add()
+    room.roomId = 7
+    room.roomName = "Kitchen"
+    room.roomNamePost.x = 20
+    room.roomNamePost.y = 15
+    room.colorId = 7
+
+    with_labels = B01MapParser(B01MapParserConfig(map_scale=4)).parse(payload.SerializeToString())
+    without_labels = B01MapParser(B01MapParserConfig(map_scale=4, show_room_labels=False)).parse(
+        payload.SerializeToString()
+    )
+
+    assert with_labels.image_content != without_labels.image_content
 
 
 def test_b01_map_parser_rejects_invalid_payload() -> None:
