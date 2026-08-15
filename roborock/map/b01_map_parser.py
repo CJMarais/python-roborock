@@ -250,7 +250,7 @@ def _extract_rooms(parsed: RobotMap) -> dict[int, dict[str, object]]:
     for boundary in parsed.roomBoundaryInfo:
         if not boundary.HasField("roomId"):
             continue
-        outline = [
+        full_outline = [
             [
                 header.minX + point.x * header.resolution,
                 header.minY + point.y * header.resolution,
@@ -261,12 +261,14 @@ def _extract_rooms(parsed: RobotMap) -> dict[int, dict[str, object]]:
             and 0 <= point.x < header.sizeX
             and 0 <= point.y < header.sizeY
         ]
-        if len(outline) < 3:
+        if len(full_outline) < 3:
             continue
 
+        outline = _limit_outline_points(full_outline)
+
         room = room_info.get(boundary.roomId)
-        x_values = [point[0] for point in outline]
-        y_values = [point[1] for point in outline]
+        x_values = [point[0] for point in full_outline]
+        y_values = [point[1] for point in full_outline]
         room_data: dict[str, object] = {
             "name": (room.roomName if room is not None and room.HasField("roomName") else f"Room {boundary.roomId}"),
             "x0": min(x_values),
@@ -280,6 +282,18 @@ def _extract_rooms(parsed: RobotMap) -> dict[int, dict[str, object]]:
             room_data["y"] = room.roomNamePost.y
         rooms[boundary.roomId] = room_data
     return rooms
+
+
+def _limit_outline_points(
+    outline: list[list[float]], *, max_points: int = 32
+) -> list[list[float]]:
+    """Bound card room outlines without changing their order or endpoints."""
+    if len(outline) <= max_points:
+        return outline
+    return [
+        outline[index * (len(outline) - 1) // (max_points - 1)]
+        for index in range(max_points)
+    ]
 
 
 def _extract_room_labels(parsed: RobotMap) -> list[B01RoomLabel]:

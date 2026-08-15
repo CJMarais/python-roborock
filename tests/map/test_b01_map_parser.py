@@ -2,6 +2,7 @@ import base64
 import gzip
 import hashlib
 import io
+import json
 import zlib
 from pathlib import Path
 
@@ -206,6 +207,32 @@ def test_b01_map_parser_extracts_card_rooms_in_vacuum_coordinates() -> None:
             "outline": [[10, 20], [11, 20], [11, 21], [10, 21]],
         }
     }
+
+
+def test_b01_map_parser_bounds_card_room_metadata_size() -> None:
+    payload = RobotMap()
+    payload.mapHead.sizeX = 1000
+    payload.mapHead.sizeY = 1000
+    payload.mapHead.minX = 10000
+    payload.mapHead.minY = 20000
+    payload.mapHead.resolution = 50
+
+    for room_id in range(1, 13):
+        room = payload.roomDataInfo.add()
+        room.roomId = room_id
+        room.roomName = f"Room {room_id}"
+        boundary = payload.roomBoundaryInfo.add()
+        boundary.roomId = room_id
+        for index in range(200):
+            point = boundary.points.add()
+            point.x = room_id * 50 + index % 50
+            point.y = room_id * 50 + index // 50
+
+    rooms = _extract_rooms(payload)
+
+    assert len(rooms) == 12
+    assert all(len(room["outline"]) == 32 for room in rooms.values())
+    assert len(json.dumps(rooms, separators=(",", ":"))) < 16384
 
 
 def test_b01_map_parser_calibration_matches_card_metadata() -> None:
