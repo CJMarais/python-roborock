@@ -271,7 +271,7 @@ async def test_q7_api_clean_segments(q7_api: Q7PropertiesApi, fake_channel: Fake
     command, params = fake_channel.published_commands[0]
     assert command == RoborockB01Q7Methods.SET_ROOM_CLEAN
     assert params == {
-        "clean_type": CleanTaskTypeMapping.ROOM.code,
+        "clean_type": CleanTaskTypeMapping.ROOM_NORMAL.code,
         "ctrl_value": SCDeviceCleanParam.START.code,
         "room_ids": [10, 11],
     }

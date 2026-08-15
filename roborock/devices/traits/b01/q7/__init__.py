@@ -156,7 +156,7 @@ class Q7PropertiesApi(Trait):
         await self.send(
             command=RoborockB01Q7Methods.SET_ROOM_CLEAN,
             params={
-                "clean_type": CleanTaskTypeMapping.ROOM.code,
+                "clean_type": CleanTaskTypeMapping.ROOM_NORMAL.code,
                 "ctrl_value": SCDeviceCleanParam.START.code,
                 "room_ids": segment_ids,
             },
