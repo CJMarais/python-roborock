@@ -11,7 +11,7 @@ from google.protobuf.message import DecodeError
 from PIL import Image, ImageDraw
 from vacuum_map_parser_base.config.color import ColorsPalette
 from vacuum_map_parser_base.config.image_config import ImageConfig
-from vacuum_map_parser_base.map_data import ImageData, MapData, Path, Point
+from vacuum_map_parser_base.map_data import ImageData, MapData, Path, Point, Room
 
 from roborock.exceptions import RoborockException
 from roborock.map.proto.b01_scmap_pb2 import RobotMap  # type: ignore[attr-defined]
@@ -85,6 +85,8 @@ class B01MapParser:
         room_names = _extract_room_names(parsed)
         room_labels = _extract_room_labels(parsed)
         room_boundaries = _extract_room_boundaries(parsed)
+        rooms = _extract_rooms(parsed)
+        calibration_points = _extract_calibration_points(parsed, scale=self._config.map_scale)
         overlays = _extract_map_overlays(parsed)
 
         image = _render_occupancy_image(
@@ -99,7 +101,8 @@ class B01MapParser:
             robot=overlays.robot if self._config.show_robot else None,
         )
 
-        map_data = MapData()
+        header = parsed.mapHead
+        map_data = MapData(calibration_center=0, calibration_diff=header.resolution)
         map_data.image = ImageData(
             size=size_x * size_y,
             top=0,
@@ -108,10 +111,30 @@ class B01MapParser:
             width=size_x,
             image_config=ImageConfig(scale=self._config.map_scale),
             data=image,
-            img_transformation=lambda p: p,
+            img_transformation=lambda p: Point(
+                (p.x - header.minX) / header.resolution,
+                (p.y - header.minY) / header.resolution,
+            ),
         )
         if room_names:
             map_data.additional_parameters["room_names"] = room_names
+        if rooms:
+            map_data.rooms = {
+                room_id: Room(
+                    x0=room["x0"],
+                    y0=room["y0"],
+                    x1=room["x1"],
+                    y1=room["y1"],
+                    number=room_id,
+                    name=room["name"],
+                    pos_x=room.get("x"),
+                    pos_y=room.get("y"),
+                )
+                for room_id, room in rooms.items()
+            }
+            map_data.additional_parameters["rooms"] = rooms
+        if calibration_points:
+            map_data.additional_parameters["calibration_points"] = calibration_points
         if overlays.path:
             path_runs = [[Point(x, y) for x, y in run] for run in _split_path(overlays.path)]
             map_data.path = Path(sum(map(len, path_runs)), 1, 0, path_runs)
@@ -164,6 +187,99 @@ def _extract_room_names(parsed: RobotMap) -> dict[int, str]:
             room_id = room.roomId
             room_names[room_id] = room.roomName if room.HasField("roomName") else f"Room {room_id}"
     return room_names
+
+
+def _extract_calibration_points(parsed: RobotMap, *, scale: int) -> list[dict[str, dict[str, float]]]:
+    """Build vacuum-to-image calibration points from the map header."""
+    if not parsed.HasField("mapHead"):
+        return []
+    header = parsed.mapHead
+    if (
+        not header.HasField("minX")
+        or not header.HasField("minY")
+        or not header.HasField("resolution")
+        or header.resolution <= 0
+        or not header.HasField("sizeX")
+        or not header.HasField("sizeY")
+        or header.sizeX < 2
+        or header.sizeY < 2
+    ):
+        return []
+
+    max_grid_x = header.sizeX - 1
+    max_grid_y = header.sizeY - 1
+    return [
+        {
+            "vacuum": {"x": header.minX, "y": header.minY},
+            "map": {"x": 0, "y": max_grid_y * scale},
+        },
+        {
+            "vacuum": {
+                "x": header.minX + max_grid_x * header.resolution,
+                "y": header.minY,
+            },
+            "map": {"x": max_grid_x * scale, "y": max_grid_y * scale},
+        },
+        {
+            "vacuum": {
+                "x": header.minX,
+                "y": header.minY + max_grid_y * header.resolution,
+            },
+            "map": {"x": 0, "y": 0},
+        },
+    ]
+
+
+def _extract_rooms(parsed: RobotMap) -> dict[int, dict[str, object]]:
+    """Extract card-compatible rooms in the vacuum coordinate system."""
+    if not parsed.HasField("mapHead"):
+        return {}
+    header = parsed.mapHead
+    if (
+        not header.HasField("minX")
+        or not header.HasField("minY")
+        or not header.HasField("resolution")
+        or header.resolution <= 0
+        or not header.HasField("sizeX")
+        or not header.HasField("sizeY")
+    ):
+        return {}
+
+    room_info = {room.roomId: room for room in parsed.roomDataInfo if room.HasField("roomId")}
+    rooms: dict[int, dict[str, object]] = {}
+    for boundary in parsed.roomBoundaryInfo:
+        if not boundary.HasField("roomId"):
+            continue
+        outline = [
+            [
+                header.minX + point.x * header.resolution,
+                header.minY + point.y * header.resolution,
+            ]
+            for point in boundary.points
+            if point.HasField("x")
+            and point.HasField("y")
+            and 0 <= point.x < header.sizeX
+            and 0 <= point.y < header.sizeY
+        ]
+        if len(outline) < 3:
+            continue
+
+        room = room_info.get(boundary.roomId)
+        x_values = [point[0] for point in outline]
+        y_values = [point[1] for point in outline]
+        room_data: dict[str, object] = {
+            "name": (room.roomName if room is not None and room.HasField("roomName") else f"Room {boundary.roomId}"),
+            "x0": min(x_values),
+            "y0": min(y_values),
+            "x1": max(x_values),
+            "y1": max(y_values),
+            "outline": outline,
+        }
+        if room is not None and room.HasField("roomNamePost"):
+            room_data["x"] = room.roomNamePost.x
+            room_data["y"] = room.roomNamePost.y
+        rooms[boundary.roomId] = room_data
+    return rooms
 
 
 def _extract_room_labels(parsed: RobotMap) -> list[B01RoomLabel]:

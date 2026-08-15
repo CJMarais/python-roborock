@@ -17,9 +17,11 @@ from roborock.map.b01_map_parser import (
     B01MapParserConfig,
     B01RoomBoundary,
     B01RoomLabel,
+    _extract_calibration_points,
     _extract_map_overlays,
     _extract_room_boundaries,
     _extract_room_labels,
+    _extract_rooms,
     _parse_scmap_payload,
     _split_path,
 )
@@ -69,6 +71,10 @@ def test_b01_map_parser_decodes_and_renders_fixture() -> None:
         18: "room9",
         19: "room10",
     }
+    assert len(parsed.map_data.additional_parameters["calibration_points"]) == 3
+    assert len(parsed.map_data.additional_parameters["rooms"]) == 10
+    assert parsed.map_data.rooms is not None
+    assert len(parsed.map_data.rooms) == 10
 
     # Image should be scaled by default.
     img = Image.open(io.BytesIO(parsed.image_content))
@@ -152,6 +158,73 @@ def test_b01_map_parser_projects_room_labels() -> None:
     room.colorId = 7
 
     assert _extract_room_labels(payload) == [B01RoomLabel(name="Kitchen", x=2, y=1, color_id=7)]
+
+
+def test_b01_map_parser_builds_calibration_points() -> None:
+    payload = RobotMap()
+    payload.mapHead.sizeX = 4
+    payload.mapHead.sizeY = 3
+    payload.mapHead.minX = 10
+    payload.mapHead.minY = 20
+    payload.mapHead.resolution = 0.5
+
+    assert _extract_calibration_points(payload, scale=4) == [
+        {"vacuum": {"x": 10, "y": 20}, "map": {"x": 0, "y": 8}},
+        {"vacuum": {"x": 11.5, "y": 20}, "map": {"x": 12, "y": 8}},
+        {"vacuum": {"x": 10, "y": 21}, "map": {"x": 0, "y": 0}},
+    ]
+
+
+def test_b01_map_parser_extracts_card_rooms_in_vacuum_coordinates() -> None:
+    payload = RobotMap()
+    payload.mapHead.sizeX = 4
+    payload.mapHead.sizeY = 3
+    payload.mapHead.minX = 10
+    payload.mapHead.minY = 20
+    payload.mapHead.resolution = 0.5
+    room = payload.roomDataInfo.add()
+    room.roomId = 42
+    room.roomName = "Kitchen"
+    room.roomNamePost.x = 10.5
+    room.roomNamePost.y = 20.5
+    boundary = payload.roomBoundaryInfo.add()
+    boundary.roomId = 42
+    for x, y in ((0, 0), (2, 0), (2, 2), (0, 2)):
+        point = boundary.points.add()
+        point.x = x
+        point.y = y
+
+    assert _extract_rooms(payload) == {
+        42: {
+            "name": "Kitchen",
+            "x0": 10,
+            "y0": 20,
+            "x1": 11,
+            "y1": 21,
+            "x": 10.5,
+            "y": 20.5,
+            "outline": [[10, 20], [11, 20], [11, 21], [10, 21]],
+        }
+    }
+
+
+def test_b01_map_parser_calibration_matches_card_metadata() -> None:
+    payload = RobotMap()
+    payload.mapHead.sizeX = 4
+    payload.mapHead.sizeY = 3
+    payload.mapHead.minX = 10
+    payload.mapHead.minY = 20
+    payload.mapHead.resolution = 0.5
+    payload.mapData.mapData = bytes([128]) * 12
+
+    parsed = B01MapParser(B01MapParserConfig(map_scale=4)).parse(payload.SerializeToString())
+
+    assert parsed.map_data is not None
+    assert parsed.map_data.calibration() == [
+        {"vacuum": {"x": 0, "y": 0}, "map": {"x": -80, "y": 168}},
+        {"vacuum": {"x": 5, "y": 0}, "map": {"x": -40, "y": 168}},
+        {"vacuum": {"x": 0, "y": 5}, "map": {"x": -80, "y": 128}},
+    ]
 
 
 def test_b01_map_parser_renders_room_label() -> None:
