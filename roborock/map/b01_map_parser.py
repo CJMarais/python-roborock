@@ -285,7 +285,7 @@ def _extract_rooms(parsed: RobotMap) -> dict[int, dict[str, object]]:
 
 
 def _limit_outline_points(
-    outline: list[list[float]], *, max_points: int = 32
+    outline: list[list[float]], *, max_points: int = 20
 ) -> list[list[float]]:
     """Bound card room outlines without changing their order or endpoints."""
     if len(outline) <= max_points:

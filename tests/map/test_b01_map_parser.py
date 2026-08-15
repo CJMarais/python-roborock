@@ -231,7 +231,7 @@ def test_b01_map_parser_bounds_card_room_metadata_size() -> None:
     rooms = _extract_rooms(payload)
 
     assert len(rooms) == 12
-    assert all(len(room["outline"]) == 32 for room in rooms.values())
+    assert all(len(room["outline"]) == 20 for room in rooms.values())
     assert len(json.dumps(rooms, separators=(",", ":"))) < 16384
 
 
