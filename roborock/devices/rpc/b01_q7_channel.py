@@ -3,7 +3,7 @@
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from typing import Protocol, TypeAlias, TypeVar
 
 from roborock.data import HomeDataDevice, HomeDataProduct
@@ -18,6 +18,7 @@ from roborock.protocols.b01_q7_protocol import (
     ParamsType,
     Q7RequestMessage,
     create_map_key,
+    decode_live_map_message,
     decode_map_payload,
     decode_rpc_response,
     encode_mqtt_payload,
@@ -51,6 +52,10 @@ class Q7MapRpcChannel(Protocol):
         params: ParamsType = None,
     ) -> bytes:
         """Send a map command and get decoded bytes."""
+        ...
+
+    def subscribe_map_stream(self) -> AsyncGenerator[bytes, None]:
+        """Stream decoded unsolicited Q7 map payloads."""
         ...
 
 
@@ -179,6 +184,23 @@ class B01Q7Channel(Channel, Q7RpcChannel, Q7MapRpcChannel):
 
     async def subscribe(self, callback: Callable[[RoborockMessage], None]) -> Callable[[], None]:
         return await self._mqtt_channel.subscribe(callback)
+
+    async def subscribe_map_stream(self) -> AsyncGenerator[bytes, None]:
+        """Stream decoded unsolicited Q7 map pushes."""
+        async for message in self._mqtt_channel.subscribe_stream():
+            try:
+                decoded = decode_live_map_message(message, self._map_key)
+            except RoborockException as ex:
+                _LOGGER.debug(
+                    "Failed to decode B01 Q7 map push: protocol=%s version=%r length=%s: %s",
+                    message.protocol,
+                    message.version,
+                    len(message.payload or b""),
+                    ex,
+                )
+                continue
+            if decoded is not None:
+                yield decoded
 
     async def send_command(
         self,

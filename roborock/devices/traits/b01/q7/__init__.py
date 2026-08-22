@@ -3,6 +3,7 @@
 Potentially other devices may fall into this category in the future.
 """
 
+import asyncio
 from typing import Any
 
 from roborock import B01Props
@@ -71,6 +72,29 @@ class Q7PropertiesApi(Trait):
             self._map_rpc_channel,
             self.map,
         )
+        self._subscribe_task: asyncio.Task[None] | None = None
+
+    async def start(self) -> None:
+        """Start the persistent Q7 live-map subscription."""
+        self._subscribe_task = asyncio.create_task(self._subscribe_loop())
+
+    async def close(self) -> None:
+        """Stop the persistent Q7 live-map subscription."""
+        if self._subscribe_task is not None:
+            self._subscribe_task.cancel()
+            try:
+                await self._subscribe_task
+            except asyncio.CancelledError:
+                pass
+            self._subscribe_task = None
+
+    async def _subscribe_loop(self) -> None:
+        """Feed decoded Q7 map pushes into the map-content trait."""
+        async for raw_payload in self._map_rpc_channel.subscribe_map_stream():
+            try:
+                self.map_content.update_from_live_map(raw_payload)
+            except RoborockException:
+                continue
 
     async def query_values(self, props: list[RoborockB01Props]) -> B01Props | None:
         """Query the device for the values of the given Q7 properties."""

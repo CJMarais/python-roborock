@@ -9,6 +9,7 @@ For B01/Q7 devices, the underlying raw map payload is retrieved via `MapTrait`.
 """
 
 import asyncio
+import logging
 from dataclasses import dataclass
 
 from vacuum_map_parser_base.map_data import MapData
@@ -16,6 +17,7 @@ from vacuum_map_parser_base.map_data import MapData
 from roborock.data import RoborockBase
 from roborock.devices.rpc.b01_q7_channel import Q7MapRpcChannel
 from roborock.devices.traits import Trait
+from roborock.devices.traits.common import TraitUpdateListener
 from roborock.exceptions import RoborockException
 from roborock.map.b01_map_parser import B01MapParser, B01MapParserConfig
 from roborock.roborock_typing import RoborockB01Q7Methods
@@ -23,6 +25,7 @@ from roborock.roborock_typing import RoborockB01Q7Methods
 from .map import MapTrait
 
 _TRUNCATE_LENGTH = 20
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -49,7 +52,7 @@ class MapContent(RoborockBase):
         return f"MapContent(image_content={img!r}, map_data={self.map_data!r})"
 
 
-class MapContentTrait(MapContent, Trait):
+class MapContentTrait(MapContent, Trait, TraitUpdateListener):
     """Trait for fetching parsed map content for Q7 devices."""
 
     def __init__(
@@ -60,9 +63,11 @@ class MapContentTrait(MapContent, Trait):
         map_parser_config: B01MapParserConfig | None = None,
     ) -> None:
         super().__init__()
+        TraitUpdateListener.__init__(self, logger=_LOGGER)
         self._map_rpc_channel = map_rpc_channel
         self._map_trait = map_trait
         self._map_parser = B01MapParser(map_parser_config)
+        self._preserve_live_progress = False
         # Map uploads are serialized per-device to avoid response cross-wiring.
         self._map_command_lock = asyncio.Lock()
 
@@ -82,6 +87,10 @@ class MapContentTrait(MapContent, Trait):
                 {"map_id": map_id},
             )
 
+        self.update_from_live_map(raw_payload, retain_raw=True)
+
+    def update_from_live_map(self, raw_payload: bytes, *, retain_raw: bool = False) -> bool:
+        """Parse and cache one decoded Q7 map, preserving active live progress."""
         try:
             parsed_data = self._map_parser.parse(raw_payload)
         except RoborockException:
@@ -92,6 +101,25 @@ class MapContentTrait(MapContent, Trait):
         if parsed_data.image_content is None:
             raise RoborockException("Failed to render B01 map image")
 
+        has_live_progress = _has_live_progress(parsed_data.map_data)
+        if self._preserve_live_progress and not has_live_progress:
+            _LOGGER.debug("Ignoring static Q7 map while live progress is active")
+            return False
+
         self.image_content = parsed_data.image_content
         self.map_data = parsed_data.map_data
-        self.raw_api_response = raw_payload
+        if has_live_progress:
+            self._preserve_live_progress = True
+        if retain_raw:
+            self.raw_api_response = raw_payload
+        self._notify_update()
+        return True
+
+    def reset_live_progress_session(self) -> None:
+        """Allow a new cleaning session's first map to replace prior progress."""
+        self._preserve_live_progress = False
+
+
+def _has_live_progress(map_data: MapData | None) -> bool:
+    """Return whether parsed Q7 map data contains path and robot position."""
+    return map_data is not None and map_data.path is not None and map_data.vacuum_position is not None

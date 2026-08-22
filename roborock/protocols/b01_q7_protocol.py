@@ -121,6 +121,21 @@ def decode_map_payload(raw_payload: bytes, map_key: MapKey) -> bytes:
         raise RoborockException("Failed to decode B01 map payload") from err
 
 
+def decode_live_map_message(message: RoborockMessage, map_key: MapKey) -> bytes | None:
+    """Decode an unsolicited Q7 protocol-301 map push entirely in memory.
+
+    Q7 devices publish changing full-map payloads while cleaning. Non-map
+    messages and map responses for another protocol version are ignored.
+    """
+    if (
+        message.protocol != RoborockMessageProtocol.MAP_RESPONSE
+        or message.version != B01_VERSION
+        or not message.payload
+    ):
+        return None
+    return decode_map_payload(message.payload, map_key)
+
+
 def _decode_base64_payload(raw_payload: bytes) -> bytes:
     """Decode base64 payload."""
 
